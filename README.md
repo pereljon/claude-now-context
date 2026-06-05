@@ -16,6 +16,20 @@ That line is added to the model's context for the turn. Claude can use it for sc
 
 Out of the box, Claude doesn't know the current time. It may infer a stale date from training data, ask the user, or fabricate one. This hook removes the guesswork at negligible token cost (~25 tokens per turn).
 
+## Why a hook (and not something else)
+
+A `UserPromptSubmit` hook is the only mechanism that (a) fires on every turn so the datetime never goes stale, (b) injects directly into context with no tool call, and (c) requires zero awareness from Claude. Every alternative either goes stale, costs a tool call, or relies on Claude remembering to fetch the time.
+
+| Approach | How it works | Why it's worse |
+|---|---|---|
+| **`UserPromptSubmit` hook** *(this project)* | Fires every turn; injects a fresh datetime into the prompt context | — |
+| `SessionStart` hook | Injects datetime once when the session opens | Goes stale within minutes; long sessions end up with a wrong "now" |
+| `CLAUDE.md` instruction | Tells Claude to run `date` at the start of every reply | Costs a Bash tool call per turn (permission prompt, latency, more tokens). Compliance is unreliable. Verified not to work in practice |
+| MCP server exposing `get_datetime` | Claude calls a tool on demand | Claude has to know to call it; setup overhead; tool call latency |
+| Custom system prompt | Embed datetime in the session's system prompt | Static for the session; same staleness problem as `SessionStart` |
+| Status line script | Show datetime in the Claude Code UI bar | Display only; the model never sees it in context |
+| Scheduled task writing to a file | Cron writes `now.txt`, Claude reads it when needed | Claude has to know to read it; tool call cost; still leaves staleness between reads |
+
 ## Install
 
 ### Homebrew (macOS / Linuxbrew)
