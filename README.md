@@ -7,14 +7,14 @@ A tiny [Claude Code](https://docs.claude.com/en/docs/claude-code) hook that inje
 On every prompt submission, a `UserPromptSubmit` hook runs `date` and emits a one-line context message:
 
 ```
-Current datetime: 2026-06-05 09:30:00 PDT
+Current datetime: Fri 2026-06-05 09:30:00 PDT
 ```
 
 That line is added to the model's context for the turn. Claude can use it for scheduling, log timestamps, date-aware reasoning, or anything else. It is not forced into the visible response.
 
 ## Cost
 
-**~25 tokens per turn. No tool use.** The injected line ("Current datetime: 2026-06-05 09:30:00 PDT") tokenizes to ~12-15 tokens; Claude Code wraps hook stdout in a `<system-reminder>` block adding another ~10. Over a 100-turn conversation that's ~2,500 tokens, well under 0.05% of a 200K context window. Because the datetime arrives as injected context, Claude never has to call a tool (Bash, MCP, etc.) to get it - no permission prompts, no tool-call latency, no extra tokens beyond the injected line.
+**~25 tokens per turn. No tool use.** The injected line ("Current datetime: Fri 2026-06-05 09:30:00 PDT") tokenizes to ~15 tokens; Claude Code wraps hook stdout in a `<system-reminder>` block adding another ~10. Over a 100-turn conversation that's ~2,500 tokens, well under 0.05% of a 200K context window. Because the datetime arrives as injected context, Claude never has to call a tool (Bash, MCP, etc.) to get it - no permission prompts, no tool-call latency, no extra tokens beyond the injected line.
 
 ## Why
 
@@ -102,6 +102,8 @@ Change the `date` format string in `claude-now-context` to taste:
 | Human-friendly | `date +'%a %b %e %Y at %l:%M %p %Z'` |
 
 If you customize after installing, uninstall and reinstall so the stored command in `settings.json` matches.
+
+> Note for clone-and-customize users: `brew upgrade` overwrites the script with the project default. If you've edited `HOOK_CMD` locally and later switch to Homebrew, your custom format will be replaced on the next upgrade. Install from a clone (`./claude-now-context --install`) if you want to keep customizations across upgrades.
 
 ## Making the datetime visible in responses
 
