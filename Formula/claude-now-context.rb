@@ -10,7 +10,7 @@ class ClaudeNowContext < Formula
   desc "Claude Code hook that injects current datetime into every prompt as context"
   homepage "https://github.com/pereljon/claude-now-context"
   url "https://github.com/pereljon/claude-now-context/archive/refs/tags/v0.2.0.tar.gz"
-  sha256 "REPLACE_WITH_SHA256_FROM_RELEASE_TARBALL"
+  sha256 "9378be56aeba8992df346f67cd0611f5e0fc7c35e1f16f52fedc0afeaf74201e"
   license "MIT"
   version "0.2.0"
 
