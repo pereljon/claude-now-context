@@ -85,8 +85,10 @@ All commands accept an optional `project` argument to target `.claude/settings.j
 
 ## Requirements
 
-- `jq` (declared as a Homebrew dependency; install manually for the one-liner path)
-- `bash`, `date`, `curl`
+No external dependencies beyond what ships with the OS. The CLI uses Perl with the `JSON::PP` core module for safe JSON edits, both of which are present on macOS and standard Linux distributions out of the box.
+
+- `bash`, `date`, `perl` (with `JSON::PP`)
+- `curl` for the one-liner install
 
 ## Customizing
 

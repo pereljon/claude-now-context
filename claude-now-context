@@ -4,8 +4,9 @@
 
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 HOOK_CMD='echo "Current datetime: $(date +'\''%Y-%m-%d %H:%M:%S %Z'\'')"'
+DRY_RUN=0
 
 show_help() {
   cat <<EOF
@@ -15,7 +16,7 @@ A Claude Code hook that injects the current local datetime into every prompt
 as context, so Claude always knows "now".
 
 USAGE:
-  claude-now-context <command> [scope]
+  claude-now-context <command> [scope] [--dry-run]
 
 COMMANDS:
   --install      Install the hook into settings.json
@@ -28,13 +29,18 @@ SCOPE (optional, defaults to user):
   user           ~/.claude/settings.json
   project        ./.claude/settings.json (in current directory)
 
+FLAGS:
+  --dry-run, -n  Print the diff of what would change without writing.
+                 Applies to --install and --uninstall.
+
 EXAMPLES:
   claude-now-context --install
   claude-now-context --install project
+  claude-now-context --install --dry-run
   claude-now-context --status
   claude-now-context --uninstall
 
-Requires: jq, date, curl (for one-liner installs).
+Requires: perl with JSON::PP (both ship with macOS and standard Linux distros).
 EOF
 }
 
@@ -50,53 +56,141 @@ resolve_settings_path() {
   esac
 }
 
-require_jq() {
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "error: jq is required (https://stedolan.github.io/jq/)" >&2
+require_perl() {
+  if ! command -v perl >/dev/null 2>&1; then
+    echo "error: perl is required (ships with macOS and standard Linux distros)" >&2
     exit 1
   fi
+  if ! perl -MJSON::PP -e 1 >/dev/null 2>&1; then
+    echo "error: perl JSON::PP module is required (normally ships with Perl 5.14+)" >&2
+    exit 1
+  fi
+}
+
+require_object_root() {
+  local settings="$1"
+  [[ -f "$settings" ]] || return 0
+  perl -MJSON::PP -e '
+    use strict; use warnings;
+    open my $fh, "<", $ARGV[0] or exit 0;
+    local $/;
+    my $text = <$fh>;
+    close $fh;
+    return 0 unless length $text;
+    my $data = eval { decode_json($text) };
+    if (!defined $data) {
+      print STDERR "refusing to modify $ARGV[0]: invalid JSON\n";
+      exit 1;
+    }
+    if (ref($data) ne "HASH") {
+      print STDERR "refusing to modify $ARGV[0]: root JSON value is not an object\n";
+      exit 1;
+    }
+  ' "$settings"
 }
 
 hook_present() {
   local settings="$1"
   [[ -f "$settings" ]] || return 1
-  jq --arg cmd "$HOOK_CMD" -e '
-    (.hooks.UserPromptSubmit // [])
-    | map(.hooks // [])
-    | flatten
-    | map(.command)
-    | index($cmd)
-  ' "$settings" >/dev/null 2>&1
+  HOOK_CMD="$HOOK_CMD" perl -MJSON::PP -e '
+    use strict; use warnings;
+    my $cmd = $ENV{HOOK_CMD};
+    open my $fh, "<", $ARGV[0] or exit 1;
+    local $/;
+    my $text = <$fh>;
+    close $fh;
+    my $data = eval { decode_json($text) };
+    exit 1 unless $data;
+    my $list = (ref($data) eq "HASH" && ref($data->{hooks}) eq "HASH")
+      ? ($data->{hooks}{UserPromptSubmit} // []) : [];
+    for my $entry (@$list) {
+      next unless ref($entry) eq "HASH";
+      for my $h (@{$entry->{hooks} // []}) {
+        exit 0 if ref($h) eq "HASH" && (($h->{command} // "") eq $cmd);
+      }
+    }
+    exit 1;
+  ' "$settings"
+}
+
+write_json_atomic() {
+  local settings="$1"
+  HOOK_CMD="$HOOK_CMD" SETTINGS="$settings" perl -MJSON::PP -e '
+    use strict; use warnings;
+    my $cmd = $ENV{HOOK_CMD};
+    my $file = $ENV{SETTINGS};
+    my $action = $ARGV[0];
+
+    open my $fh, "<", $file or die "cannot read $file: $!";
+    local $/;
+    my $text = <$fh>;
+    close $fh;
+    my $data = decode_json($text);
+    die "refusing to modify $file: root JSON value is not an object\n"
+      unless ref($data) eq "HASH";
+
+    if ($action eq "install") {
+      $data->{hooks} //= {};
+      $data->{hooks}{UserPromptSubmit} //= [];
+      push @{$data->{hooks}{UserPromptSubmit}},
+        { hooks => [ { type => "command", command => $cmd } ] };
+    } elsif ($action eq "uninstall") {
+      my $list = $data->{hooks}{UserPromptSubmit} // [];
+      my @kept;
+      for my $entry (@$list) {
+        next unless ref($entry) eq "HASH";
+        my @keep_hooks = grep {
+          ref($_) eq "HASH" && (($_->{command} // "") ne $cmd)
+        } @{$entry->{hooks} // []};
+        push @kept, { %$entry, hooks => \@keep_hooks } if @keep_hooks;
+      }
+      if (@kept) {
+        $data->{hooks}{UserPromptSubmit} = \@kept;
+      } else {
+        delete $data->{hooks}{UserPromptSubmit};
+      }
+      delete $data->{hooks} if exists $data->{hooks} && !%{$data->{hooks}};
+    } else {
+      die "unknown action: $action";
+    }
+
+    my $json = JSON::PP->new->indent(1)->space_after(1)->canonical;
+    $json->indent_length(2) if $json->can("indent_length");
+    open my $out, ">", "$file.tmp" or die "cannot write $file.tmp: $!";
+    print $out $json->encode($data);
+    close $out;
+    rename "$file.tmp", $file or die "rename failed: $!";
+  ' "$2"
 }
 
 cmd_install() {
-  require_jq
+  require_perl
   local settings
   settings="$(resolve_settings_path "${1:-user}")"
+  mkdir -p "$(dirname "$settings")"
+  [[ -f "$settings" ]] || echo '{}' > "$settings"
 
-  if [[ "${1:-user}" == "project" ]]; then
-    mkdir -p "$(dirname "$settings")"
-  else
-    mkdir -p "$(dirname "$settings")"
-  fi
-
-  if [[ ! -f "$settings" ]]; then
-    echo '{}' > "$settings"
-  fi
+  require_object_root "$settings"
 
   if hook_present "$settings"; then
     echo "Hook already installed in $settings - nothing to do."
     return 0
   fi
 
-  cp "$settings" "${settings}.bak.$(date +%s)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    local preview
+    preview="$(mktemp)"
+    trap 'rm -f "$preview"' RETURN
+    cp "$settings" "$preview"
+    write_json_atomic "$preview" install
+    echo "DRY RUN: would install hook into $settings"
+    echo "DRY RUN: diff (- current, + after install):"
+    diff -u "$settings" "$preview" || true
+    return 0
+  fi
 
-  jq --arg cmd "$HOOK_CMD" '
-    .hooks.UserPromptSubmit = (
-      (.hooks.UserPromptSubmit // [])
-      + [{"hooks": [{"type": "command", "command": $cmd}]}]
-    )
-  ' "$settings" > "${settings}.tmp" && mv "${settings}.tmp" "$settings"
+  cp "$settings" "${settings}.bak.$(date +%s).$$"
+  write_json_atomic "$settings" install
 
   echo "Installed datetime hook into $settings"
   echo "Backup saved alongside as ${settings}.bak.*"
@@ -104,7 +198,7 @@ cmd_install() {
 }
 
 cmd_uninstall() {
-  require_jq
+  require_perl
   local settings
   settings="$(resolve_settings_path "${1:-user}")"
 
@@ -113,31 +207,34 @@ cmd_uninstall() {
     return 0
   fi
 
+  require_object_root "$settings"
+
   if ! hook_present "$settings"; then
     echo "Hook not present in $settings - nothing to do."
     return 0
   fi
 
-  cp "$settings" "${settings}.bak.$(date +%s)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    local preview
+    preview="$(mktemp)"
+    trap 'rm -f "$preview"' RETURN
+    cp "$settings" "$preview"
+    write_json_atomic "$preview" uninstall
+    echo "DRY RUN: would remove hook from $settings"
+    echo "DRY RUN: diff (- current, + after uninstall):"
+    diff -u "$settings" "$preview" || true
+    return 0
+  fi
 
-  jq --arg cmd "$HOOK_CMD" '
-    .hooks.UserPromptSubmit = (
-      (.hooks.UserPromptSubmit // [])
-      | map(
-          .hooks = ((.hooks // []) | map(select(.command != $cmd)))
-        )
-      | map(select((.hooks | length) > 0))
-    )
-    | if (.hooks.UserPromptSubmit | length) == 0 then del(.hooks.UserPromptSubmit) else . end
-    | if (.hooks // {}) == {} then del(.hooks) else . end
-  ' "$settings" > "${settings}.tmp" && mv "${settings}.tmp" "$settings"
+  cp "$settings" "${settings}.bak.$(date +%s).$$"
+  write_json_atomic "$settings" uninstall
 
   echo "Removed datetime hook from $settings"
   echo "Backup saved alongside as ${settings}.bak.*"
 }
 
 cmd_status() {
-  require_jq
+  require_perl
   local settings
   settings="$(resolve_settings_path "${1:-user}")"
 
@@ -154,6 +251,19 @@ cmd_status() {
     return 1
   fi
 }
+
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run|-n) DRY_RUN=1 ;;
+    *) ARGS+=("$arg") ;;
+  esac
+done
+if [[ ${#ARGS[@]} -gt 0 ]]; then
+  set -- "${ARGS[@]}"
+else
+  set --
+fi
 
 case "${1:-}" in
   --install|install)     shift; cmd_install "$@" ;;
