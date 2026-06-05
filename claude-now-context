@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-VERSION="0.4.0"
+VERSION="0.4.1"
 
 # Resolve the hook script path as a sibling of this script
 _SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
