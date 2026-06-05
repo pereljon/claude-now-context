@@ -7,7 +7,7 @@
 # To publish a new release, see HOMEBREW.md.
 
 class ClaudeNowContext < Formula
-  desc "Claude Code hook that injects current datetime into every prompt as context"
+  desc "Claude Code hook that injects current datetime and response duration into every prompt"
   homepage "https://github.com/pereljon/claude-now-context"
   url "https://github.com/pereljon/claude-now-context/archive/refs/tags/v0.4.1.tar.gz"
   sha256 "8398a8dad82842ba6d00524d8b7f780a767814e01eb6f183e8f4f723bdd8e05e"
