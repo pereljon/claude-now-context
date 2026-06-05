@@ -298,6 +298,8 @@ cmd_uninstall() {
     return 0
   fi
 
+  local state_dir="${HOME}/.claude/now-context-state"
+
   if [[ "$DRY_RUN" == "1" ]]; then
     local preview
     preview="$(mktemp)"
@@ -307,6 +309,9 @@ cmd_uninstall() {
     echo "DRY RUN: would remove hooks from $settings"
     echo "DRY RUN: diff (- current, + after uninstall):"
     diff -u "$settings" "$preview" || true
+    if [[ -d "$state_dir" ]]; then
+      echo "DRY RUN: would remove state directory $state_dir"
+    fi
     return 0
   fi
 
@@ -315,6 +320,11 @@ cmd_uninstall() {
 
   echo "Removed datetime and response-duration hooks from $settings"
   echo "Backup saved alongside as ${settings}.bak.*"
+
+  if [[ -d "$state_dir" ]]; then
+    rm -rf "$state_dir"
+    echo "Removed session state directory $state_dir"
+  fi
 }
 
 cmd_status() {
