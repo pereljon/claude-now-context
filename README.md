@@ -1,24 +1,32 @@
 # claude-now-context
 
-A tiny [Claude Code](https://docs.claude.com/en/docs/claude-code) hook that injects the current local datetime into every user prompt as context. Claude sees the time on every turn and can reason about "now" without guessing or asking.
+A tiny [Claude Code](https://docs.claude.com/en/docs/claude-code) hook that injects the current local datetime and previous-response duration into every user prompt as context. Claude sees the time and knows how long its last response took, without guessing or asking.
 
 ## What it does
 
-On every prompt submission, a `UserPromptSubmit` hook runs `date` and emits a one-line context message:
+On every prompt submission, a `UserPromptSubmit` hook emits a one-line context message:
 
 ```
 Current datetime: Fri 2026-06-05 09:30:00 PDT
 ```
 
-That line is added to the model's context for the turn. Claude can use it for scheduling, log timestamps, date-aware reasoning, or anything else. It is not forced into the visible response.
+On the second turn and beyond, the duration of Claude's previous response is also included:
+
+```
+Current datetime: Fri 2026-06-05 09:31:47 PDT. Previous response took 47s.
+```
+
+A matching `Stop` hook measures how long each response took and stores it for the next turn.
+
+That line is added to the model's context for the turn. Claude can use it for scheduling, log timestamps, date-aware reasoning, or estimating how complex its last answer was. It is not forced into the visible response.
 
 ## Cost
 
-**~25 tokens per turn. No tool use.** The injected line ("Current datetime: Fri 2026-06-05 09:30:00 PDT") tokenizes to ~15 tokens; Claude Code wraps hook stdout in a `<system-reminder>` block adding another ~10. Over a 100-turn conversation that's ~2,500 tokens, well under 0.05% of a 200K context window. Because the datetime arrives as injected context, Claude never has to call a tool (Bash, MCP, etc.) to get it - no permission prompts, no tool-call latency, no extra tokens beyond the injected line.
+**~25 tokens per turn. No tool use.** The injected line tokenizes to roughly 15-20 tokens; Claude Code wraps hook stdout in a `<system-reminder>` block adding another ~10. Over a 100-turn conversation that is ~2,500 tokens, well under 0.05% of a 200K context window. Because datetime and duration arrive as injected context, Claude never has to call a tool to get them: no permission prompts, no tool-call latency, no extra tokens beyond the injected line.
 
 ## Why
 
-Out of the box, Claude doesn't know the current time. It may infer a stale date from training data, ask the user, or fabricate one. This hook removes the guesswork at negligible token cost.
+Out of the box, Claude doesn't know the current time or how long it just spent on a response. It may infer a stale date from training data, ask the user, or fabricate one. This hook removes the guesswork at negligible token cost.
 
 ## Why a hook (and not something else)
 
@@ -67,21 +75,31 @@ cd claude-now-context
 
 ### Manual
 
-Merge the snippet in `hook.json` into your `~/.claude/settings.json` (user-level) or `.claude/settings.json` (project-level). If a `hooks.UserPromptSubmit` array already exists, append the entry rather than overwriting.
+Merge the snippet in `hook.json` into your `~/.claude/settings.json` (user-level) or `.claude/settings.json` (project-level). Replace `/path/to/claude-now-context-hook` with the actual path to the installed script (run `which claude-now-context-hook` after a Homebrew install). Both the `UserPromptSubmit` and `Stop` entries are required.
 
-Takes effect on your next prompt - `UserPromptSubmit` hooks are re-read from `settings.json` each turn, so no session restart is needed.
+Takes effect on your next prompt - hooks are re-read from `settings.json` each turn, so no session restart is needed.
 
 ## Usage
 
 ```bash
-claude-now-context --install      # add the hook
-claude-now-context --uninstall    # remove it
+claude-now-context --install      # add both hooks
+claude-now-context --uninstall    # remove them
 claude-now-context --status       # report whether installed
 claude-now-context --version
 claude-now-context --help
 ```
 
 All commands accept an optional `project` argument to target `.claude/settings.json` in the current directory instead of `~/.claude/settings.json`.
+
+## Upgrading from v0.3.x
+
+Run `--install` after `brew upgrade` (or after pulling the latest clone). The CLI detects the old-format hook automatically and replaces it with the new two-hook setup:
+
+```
+Upgraded existing datetime hook to the current format and added response-duration tracking in ~/.claude/settings.json
+```
+
+No manual cleanup needed.
 
 ## Requirements
 
@@ -90,30 +108,13 @@ No external dependencies beyond what ships with the OS. The CLI uses Perl with t
 - `bash`, `date`, `perl` (with `JSON::PP`)
 - `curl` for the one-liner install
 
-## Customizing
+## How it works
 
-Change the `date` format string in `claude-now-context` to taste:
+[`UserPromptSubmit`](https://docs.claude.com/en/docs/claude-code/hooks) is a Claude Code hook that fires whenever you submit a prompt, before the model processes it. The hook's stdout becomes additional context for that turn.
 
-| Want | Format |
-|------|--------|
-| ISO 8601 UTC | `date -u +'%Y-%m-%dT%H:%M:%SZ'` |
-| Local with weekday | `date +'%A %Y-%m-%d %H:%M %Z'` |
-| Epoch seconds | `date +%s` |
-| Human-friendly | `date +'%a %b %e %Y at %l:%M %p %Z'` |
+[`Stop`](https://docs.claude.com/en/docs/claude-code/hooks) fires when Claude finishes a response. This project uses a `Stop` hook to record when the response ended into a per-session state file (`~/.claude/now-context-state/<session_id>.json`). The next `UserPromptSubmit` reads that file, computes the duration, and includes it in the injected line.
 
-If you customize after installing, uninstall and reinstall so the stored command in `settings.json` matches.
-
-> Note for clone-and-customize users: `brew upgrade` overwrites the script with the project default. If you've edited `HOOK_CMD` locally and later switch to Homebrew, your custom format will be replaced on the next upgrade. Install from a clone (`./claude-now-context --install`) if you want to keep customizations across upgrades.
-
-## Making the datetime visible in responses
-
-By default, Claude sees the datetime but doesn't display it. To prefix every response with it, edit the `HOOK_CMD` line in `claude-now-context` to add an instruction:
-
-```bash
-HOOK_CMD='echo "Current datetime: $(date +'\''%Y-%m-%d %H:%M:%S %Z'\''). Begin every response with this timestamp on its own line."'
-```
-
-This is instruction-based, not enforced. Claude follows it most of the time but may skip it on short replies.
+Both hooks are managed by a single Perl script (`claude-now-context-hook`) installed alongside the main CLI. Concurrent Claude Code sessions are naturally isolated by their session IDs.
 
 ## Uninstall
 
@@ -131,11 +132,17 @@ brew untap pereljon/tap   # optional
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pereljon/claude-now-context/main/uninstall.sh)"
 ```
 
-The uninstall path surgically removes the hook entry, saves a backup, and leaves the rest of your settings untouched. To restore everything to pre-install state instead, recover from the `.bak.*` file created on install.
+The uninstall path surgically removes both hook entries, saves a backup, and leaves the rest of your settings untouched.
 
-## How it works
+## Making the datetime visible in responses
 
-[`UserPromptSubmit`](https://docs.claude.com/en/docs/claude-code/hooks) is a Claude Code hook that fires whenever you submit a prompt, before the model processes it. The hook's stdout becomes additional context for that turn. This project uses one line of shell wrapped in a thin CLI for install/uninstall management.
+By default, Claude sees the datetime but doesn't display it. To prefix every response with it, add an instruction to your `CLAUDE.md`:
+
+```markdown
+Begin every response with the current datetime from context.
+```
+
+This is instruction-based, not enforced. Claude follows it most of the time but may skip it on short replies.
 
 ## Releases
 

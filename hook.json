@@ -5,7 +5,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"Current datetime: $(date +'%Y-%m-%d %H:%M:%S %Z')\""
+            "command": "/path/to/claude-now-context-hook on-prompt"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/claude-now-context-hook on-stop"
           }
         ]
       }

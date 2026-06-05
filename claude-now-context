@@ -1,28 +1,35 @@
 #!/usr/bin/env bash
-# claude-now-context - manage the datetime UserPromptSubmit hook for Claude Code
+# claude-now-context - manage datetime + response-duration hooks for Claude Code
 # https://github.com/pereljon/claude-now-context
 
 set -euo pipefail
 
-VERSION="0.3.1"
-HOOK_CMD='echo "Current datetime: $(date +'\''%a %Y-%m-%d %H:%M:%S %Z'\'')"'
-HOOK_SIGNATURE='echo "Current datetime:'
+VERSION="0.4.0"
+
+# Resolve the hook script path as a sibling of this script
+_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+HOOK_SCRIPT="$_SCRIPT_DIR/claude-now-context-hook"
+HOOK_CMD_PROMPT="$HOOK_SCRIPT on-prompt"
+HOOK_CMD_STOP="$HOOK_SCRIPT on-stop"
+
+HOOK_SIGNATURE='claude-now-context-hook'
+LEGACY_HOOK_SIGNATURE='echo "Current datetime:'
 DRY_RUN=0
 
 show_help() {
   cat <<EOF
 claude-now-context $VERSION
 
-A Claude Code hook that injects the current local datetime into every prompt
-as context, so Claude always knows "now".
+A Claude Code hook that injects the current datetime and previous-response
+duration into every prompt as context.
 
 USAGE:
   claude-now-context <command> [scope] [--dry-run]
 
 COMMANDS:
-  --install      Install the hook into settings.json
-  --uninstall    Remove the hook from settings.json
-  --status       Report whether the hook is currently installed
+  --install      Install the hooks into settings.json
+  --uninstall    Remove the hooks from settings.json
+  --status       Report whether the hooks are currently installed
   --version      Print version and exit
   --help         Show this help
 
@@ -90,32 +97,6 @@ require_object_root() {
   ' "$settings"
 }
 
-hook_present() {
-  local settings="$1"
-  [[ -f "$settings" ]] || return 1
-  HOOK_SIGNATURE="$HOOK_SIGNATURE" perl -MJSON::PP -e '
-    use strict; use warnings;
-    my $sig = $ENV{HOOK_SIGNATURE};
-    open my $fh, "<", $ARGV[0] or exit 1;
-    local $/;
-    my $text = <$fh>;
-    close $fh;
-    my $data = eval { decode_json($text) };
-    exit 1 unless $data;
-    my $list = (ref($data) eq "HASH" && ref($data->{hooks}) eq "HASH")
-      ? ($data->{hooks}{UserPromptSubmit} // []) : [];
-    for my $entry (@$list) {
-      next unless ref($entry) eq "HASH";
-      for my $h (@{$entry->{hooks} // []}) {
-        next unless ref($h) eq "HASH";
-        my $cmd = $h->{command} // "";
-        exit 0 if length($cmd) >= length($sig) && substr($cmd, 0, length($sig)) eq $sig;
-      }
-    }
-    exit 1;
-  ' "$settings"
-}
-
 # Prints one of: current | outdated | absent
 install_state() {
   local settings="$1"
@@ -123,31 +104,52 @@ install_state() {
     echo absent
     return
   fi
-  HOOK_SIGNATURE="$HOOK_SIGNATURE" HOOK_CMD="$HOOK_CMD" perl -MJSON::PP -e '
+  HOOK_SIGNATURE="$HOOK_SIGNATURE" \
+  LEGACY_SIG="$LEGACY_HOOK_SIGNATURE" \
+  HOOK_CMD_PROMPT="$HOOK_CMD_PROMPT" \
+  HOOK_CMD_STOP="$HOOK_CMD_STOP" \
+  perl -MJSON::PP -e '
     use strict; use warnings;
-    my $sig = $ENV{HOOK_SIGNATURE};
-    my $current = $ENV{HOOK_CMD};
+    my $new_sig    = $ENV{HOOK_SIGNATURE};
+    my $old_sig    = $ENV{LEGACY_SIG};
+    my $prompt_cmd = $ENV{HOOK_CMD_PROMPT};
+    my $stop_cmd   = $ENV{HOOK_CMD_STOP};
+
     open my $fh, "<", $ARGV[0] or do { print "absent"; exit 0 };
     local $/;
     my $text = <$fh>;
     close $fh;
     my $data = eval { decode_json($text) };
     unless ($data && ref($data) eq "HASH") { print "absent"; exit 0 }
-    my $list = (ref($data->{hooks}) eq "HASH")
-      ? ($data->{hooks}{UserPromptSubmit} // []) : [];
-    my @matches;
-    for my $entry (@$list) {
-      next unless ref($entry) eq "HASH";
-      for my $h (@{$entry->{hooks} // []}) {
-        next unless ref($h) eq "HASH";
-        my $cmd = $h->{command} // "";
-        push @matches, $cmd
-          if length($cmd) >= length($sig) && substr($cmd, 0, length($sig)) eq $sig;
+
+    my $matches_sig = sub {
+      my $c = shift // "";
+      return index($c, $new_sig) >= 0 || index($c, $old_sig) >= 0;
+    };
+
+    my $scan = sub {
+      my ($hook_type) = @_;
+      my @matches;
+      return @matches unless ref($data->{hooks}) eq "HASH";
+      my $list = $data->{hooks}{$hook_type};
+      return @matches unless ref($list) eq "ARRAY";
+      for my $entry (@$list) {
+        next unless ref($entry) eq "HASH";
+        for my $h (@{$entry->{hooks} // []}) {
+          next unless ref($h) eq "HASH";
+          my $cmd = $h->{command} // "";
+          push @matches, $cmd if $matches_sig->($cmd);
+        }
       }
-    }
-    if (@matches == 1 && $matches[0] eq $current) {
+      return @matches;
+    };
+
+    my @p = $scan->("UserPromptSubmit");
+    my @s = $scan->("Stop");
+
+    if (@p == 1 && $p[0] eq $prompt_cmd && @s == 1 && $s[0] eq $stop_cmd) {
       print "current";
-    } elsif (@matches) {
+    } elsif (@p || @s) {
       print "outdated";
     } else {
       print "absent";
@@ -157,12 +159,20 @@ install_state() {
 
 write_json_atomic() {
   local settings="$1"
-  HOOK_CMD="$HOOK_CMD" HOOK_SIGNATURE="$HOOK_SIGNATURE" SETTINGS="$settings" perl -MJSON::PP -e '
+  local action="$2"
+  HOOK_SIGNATURE="$HOOK_SIGNATURE" \
+  LEGACY_SIG="$LEGACY_HOOK_SIGNATURE" \
+  HOOK_CMD_PROMPT="$HOOK_CMD_PROMPT" \
+  HOOK_CMD_STOP="$HOOK_CMD_STOP" \
+  SETTINGS="$settings" \
+  perl -MJSON::PP -e '
     use strict; use warnings;
-    my $cmd = $ENV{HOOK_CMD};
-    my $sig = $ENV{HOOK_SIGNATURE};
-    my $file = $ENV{SETTINGS};
-    my $action = $ARGV[0];
+    my $new_sig    = $ENV{HOOK_SIGNATURE};
+    my $old_sig    = $ENV{LEGACY_SIG};
+    my $prompt_cmd = $ENV{HOOK_CMD_PROMPT};
+    my $stop_cmd   = $ENV{HOOK_CMD_STOP};
+    my $file       = $ENV{SETTINGS};
+    my $action     = $ARGV[0];
 
     open my $fh, "<", $file or die "cannot read $file: $!";
     local $/;
@@ -172,41 +182,45 @@ write_json_atomic() {
     die "refusing to modify $file: root JSON value is not an object\n"
       unless ref($data) eq "HASH";
 
-    my $matches_signature = sub {
+    my $matches_any_sig = sub {
       my $c = shift // "";
-      return length($c) >= length($sig) && substr($c, 0, length($sig)) eq $sig;
+      return index($c, $new_sig) >= 0 || index($c, $old_sig) >= 0;
     };
 
-    my $remove_signature_hooks = sub {
-      my $list = (ref($data->{hooks}) eq "HASH"
-        ? $data->{hooks}{UserPromptSubmit}
-        : undef) // [];
+    my $remove_from = sub {
+      my ($hook_type) = @_;
+      return unless ref($data->{hooks}) eq "HASH";
+      my $list = $data->{hooks}{$hook_type};
+      return unless ref($list) eq "ARRAY";
       my @kept;
       for my $entry (@$list) {
         next unless ref($entry) eq "HASH";
-        my @keep_hooks = grep {
-          !(ref($_) eq "HASH" && $matches_signature->($_->{command}))
+        my @keep = grep {
+          !(ref($_) eq "HASH" && $matches_any_sig->($_->{command}))
         } @{$entry->{hooks} // []};
-        push @kept, { %$entry, hooks => \@keep_hooks } if @keep_hooks;
+        push @kept, { %$entry, hooks => \@keep } if @keep;
       }
       if (@kept) {
-        $data->{hooks}{UserPromptSubmit} = \@kept;
+        $data->{hooks}{$hook_type} = \@kept;
       } else {
-        delete $data->{hooks}{UserPromptSubmit} if ref($data->{hooks}) eq "HASH";
+        delete $data->{hooks}{$hook_type};
       }
-      delete $data->{hooks}
-        if ref($data->{hooks}) eq "HASH" && !%{$data->{hooks}};
     };
 
+    $remove_from->("UserPromptSubmit");
+    $remove_from->("Stop");
+    delete $data->{hooks}
+      if ref($data->{hooks}) eq "HASH" && !%{$data->{hooks}};
+
     if ($action eq "install") {
-      $remove_signature_hooks->();
       $data->{hooks} //= {};
       $data->{hooks}{UserPromptSubmit} //= [];
       push @{$data->{hooks}{UserPromptSubmit}},
-        { hooks => [ { type => "command", command => $cmd } ] };
-    } elsif ($action eq "uninstall") {
-      $remove_signature_hooks->();
-    } else {
+        { hooks => [{ type => "command", command => $prompt_cmd }] };
+      $data->{hooks}{Stop} //= [];
+      push @{$data->{hooks}{Stop}},
+        { hooks => [{ type => "command", command => $stop_cmd }] };
+    } elsif ($action ne "uninstall") {
       die "unknown action: $action";
     }
 
@@ -214,9 +228,9 @@ write_json_atomic() {
     $json->indent_length(2) if $json->can("indent_length");
     open my $out, ">", "$file.tmp" or die "cannot write $file.tmp: $!";
     print $out $json->encode($data);
-    close $out;
+    close $out or die "flush failed: $!";
     rename "$file.tmp", $file or die "rename failed: $!";
-  ' "$2"
+  ' "$action"
 }
 
 cmd_install() {
@@ -232,7 +246,7 @@ cmd_install() {
   state="$(install_state "$settings")"
 
   if [[ "$state" == "current" ]]; then
-    echo "Hook already installed in $settings - nothing to do."
+    echo "Hooks already installed in $settings - nothing to do."
     return 0
   fi
 
@@ -245,7 +259,7 @@ cmd_install() {
     if [[ "$state" == "outdated" ]]; then
       echo "DRY RUN: would upgrade existing datetime hook to the current format in $settings"
     else
-      echo "DRY RUN: would install hook into $settings"
+      echo "DRY RUN: would install hooks into $settings"
     fi
     echo "DRY RUN: diff (- current, + after install):"
     diff -u "$settings" "$preview" || true
@@ -256,9 +270,9 @@ cmd_install() {
   write_json_atomic "$settings" install
 
   if [[ "$state" == "outdated" ]]; then
-    echo "Upgraded existing datetime hook to the current format in $settings"
+    echo "Upgraded existing datetime hook to the current format and added response-duration tracking in $settings"
   else
-    echo "Installed datetime hook into $settings"
+    echo "Installed datetime and response-duration hooks into $settings"
   fi
   echo "Backup saved alongside as ${settings}.bak.*"
   echo "Takes effect immediately - no session restart needed."
@@ -276,8 +290,11 @@ cmd_uninstall() {
 
   require_object_root "$settings"
 
-  if ! hook_present "$settings"; then
-    echo "Hook not present in $settings - nothing to do."
+  local state
+  state="$(install_state "$settings")"
+
+  if [[ "$state" == "absent" ]]; then
+    echo "Hooks not present in $settings - nothing to do."
     return 0
   fi
 
@@ -287,7 +304,7 @@ cmd_uninstall() {
     trap 'rm -f "$preview"' RETURN
     cp "$settings" "$preview"
     write_json_atomic "$preview" uninstall
-    echo "DRY RUN: would remove hook from $settings"
+    echo "DRY RUN: would remove hooks from $settings"
     echo "DRY RUN: diff (- current, + after uninstall):"
     diff -u "$settings" "$preview" || true
     return 0
@@ -296,7 +313,7 @@ cmd_uninstall() {
   cp "$settings" "${settings}.bak.$(date +%s).$$"
   write_json_atomic "$settings" uninstall
 
-  echo "Removed datetime hook from $settings"
+  echo "Removed datetime and response-duration hooks from $settings"
   echo "Backup saved alongside as ${settings}.bak.*"
 }
 
@@ -310,13 +327,25 @@ cmd_status() {
     return 1
   fi
 
-  if hook_present "$settings"; then
-    echo "installed in $settings"
-    return 0
-  else
-    echo "not installed in $settings"
-    return 1
-  fi
+  local state
+  state="$(install_state "$settings")"
+
+  case "$state" in
+    current)
+      echo "prompt hook: installed (path: $settings)"
+      echo "stop hook:   installed"
+      return 0
+      ;;
+    outdated)
+      echo "hook: outdated (run --install to upgrade)"
+      echo "path: $settings"
+      return 1
+      ;;
+    absent)
+      echo "not installed in $settings"
+      return 1
+      ;;
+  esac
 }
 
 ARGS=()

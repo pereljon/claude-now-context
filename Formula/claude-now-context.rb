@@ -9,20 +9,22 @@
 class ClaudeNowContext < Formula
   desc "Claude Code hook that injects current datetime into every prompt as context"
   homepage "https://github.com/pereljon/claude-now-context"
-  url "https://github.com/pereljon/claude-now-context/archive/refs/tags/v0.3.1.tar.gz"
-  sha256 "7bf3d76cf287d2a19386ad35e019f1f629bb020cd27649e5224073b5afaabb64"
+  url "https://github.com/pereljon/claude-now-context/archive/refs/tags/v0.4.0.tar.gz"
+  sha256 "PLACEHOLDER_SHA256"
   license "MIT"
-  version "0.3.1"
+  version "0.4.0"
 
   # No runtime dependencies: uses Perl + JSON::PP, which ship with macOS and
   # standard Linux distributions.
 
   def install
     bin.install "claude-now-context"
+    bin.install "claude-now-context-hook"
   end
 
   test do
     assert_match "claude-now-context", shell_output("#{bin}/claude-now-context --version")
     assert_match "USAGE", shell_output("#{bin}/claude-now-context --help")
+    assert_match "Current datetime:", shell_output("echo '{}' | #{bin}/claude-now-context-hook on-prompt")
   end
 end

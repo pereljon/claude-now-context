@@ -1,0 +1,91 @@
+#!/usr/bin/env perl
+# claude-now-context-hook - UserPromptSubmit/Stop handler for claude-now-context
+# https://github.com/pereljon/claude-now-context
+
+use strict;
+use warnings;
+use JSON::PP;
+use POSIX qw(strftime);
+
+my $action = shift @ARGV // '';
+unless ($action eq 'on-prompt' || $action eq 'on-stop') {
+    print STDERR "Usage: claude-now-context-hook <on-prompt|on-stop>\n";
+    exit 1;
+}
+
+my $state_dir = "$ENV{HOME}/.claude/now-context-state";
+
+# Read stdin JSON; degrade gracefully on missing or malformed input
+my $raw = do { local $/; eval { <STDIN> } // '' };
+my $input = eval { decode_json($raw) };
+$input = {} unless defined $input && ref($input) eq 'HASH';
+my $session_id = $input->{session_id} // '';
+
+# Reject any session_id that isn't a safe filename token
+$session_id = '' unless $session_id =~ /\A[\w\-]{1,128}\z/;
+
+my $now = time();
+
+if ($action eq 'on-prompt') {
+    my $datetime = strftime('%a %Y-%m-%d %H:%M:%S %Z', localtime($now));
+    my $line = "Current datetime: $datetime";
+
+    if (length $session_id) {
+        my $state_file = "$state_dir/$session_id.json";
+        my $state = _load_state($state_file);
+        if (defined $state && defined $state->{last_duration}) {
+            $line .= '. Previous response took ' . _fmt_dur($state->{last_duration}) . '.';
+        }
+        eval {
+            mkdir($state_dir, 0700) unless -d $state_dir;
+            _save_state($state_file, { prompt_started => int($now), last_duration => undef });
+        };
+        # silently continue on write failure; datetime line still emitted
+    }
+
+    print "$line\n";
+
+} else {  # on-stop
+    exit 0 unless length $session_id;
+    my $state_file = "$state_dir/$session_id.json";
+    my $state = _load_state($state_file);
+    exit 0 unless defined $state && defined $state->{prompt_started};
+    my $duration = int($now) - int($state->{prompt_started});
+    $duration = 0 if $duration < 0;  # guard against clock adjustments
+    $state->{last_duration} = $duration;
+    eval { _save_state($state_file, $state) };
+    exit 0;
+}
+
+sub _load_state {
+    my ($file) = @_;
+    return undef unless -f $file;
+    open my $fh, '<', $file or return undef;
+    local $/;
+    my $text = <$fh>;
+    close $fh;
+    my $data = eval { decode_json($text) };
+    return undef unless defined $data && ref($data) eq 'HASH';
+    return $data;
+}
+
+sub _save_state {
+    my ($file, $data) = @_;
+    my $json = JSON::PP->new->canonical;
+    my $tmp  = "$file.tmp";
+    open my $fh, '>', $tmp or die "cannot write $tmp: $!";
+    print $fh $json->encode($data);
+    close $fh or die "flush failed: $!";
+    rename $tmp, $file or die "rename failed: $!";
+}
+
+sub _fmt_dur {
+    my $s = int(shift);
+    return "${s}s" if $s <= 90;
+    if ($s < 3600) {
+        my ($m, $r) = (int($s / 60), $s % 60);
+        return $r ? "${m}m${r}s" : "${m}m";
+    }
+    my ($h, $m) = (int($s / 3600), int(($s % 3600) / 60));
+    return $m ? "${h}h${m}m" : "${h}h";
+}
