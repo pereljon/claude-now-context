@@ -27,14 +27,14 @@ $session_id = '' unless $session_id =~ /\A[\w\-]{1,128}\z/;
 my $now = time();
 
 if ($action eq 'on-prompt') {
-    my $datetime = strftime('%a %Y-%m-%d %H:%M:%S %Z', localtime($now));
-    my $line = "Current datetime: $datetime";
+    my $datetime = strftime('%a %Y-%m-%d %H:%M %Z', localtime($now));
+    my $line = "Now: $datetime";
 
     if (length $session_id) {
         my $state_file = "$state_dir/$session_id.json";
         my $state = _load_state($state_file);
         if (defined $state && defined $state->{last_duration}) {
-            $line .= '. Previous response took ' . _fmt_dur($state->{last_duration}) . '.';
+            $line .= '. Last response: ' . _fmt_dur($state->{last_duration}) . '.';
         }
         eval {
             mkdir($state_dir, 0700) unless -d $state_dir;

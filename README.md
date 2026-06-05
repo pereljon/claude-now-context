@@ -7,13 +7,13 @@ A tiny [Claude Code](https://docs.claude.com/en/docs/claude-code) hook that inje
 On every prompt submission, a `UserPromptSubmit` hook emits a one-line context message:
 
 ```
-Current datetime: Fri 2026-06-05 09:30:00 PDT
+Now: Fri 2026-06-05 09:30 PDT
 ```
 
 On the second turn and beyond, the duration of Claude's previous response is also included:
 
 ```
-Current datetime: Fri 2026-06-05 09:31:47 PDT. Previous response took 47s.
+Now: Fri 2026-06-05 09:31 PDT. Last response: 47s.
 ```
 
 A matching `Stop` hook measures how long each response took and stores it for the next turn.
@@ -22,7 +22,7 @@ That line is added to the model's context for the turn. Claude can use it for sc
 
 ## Cost
 
-**~35 tokens per turn. No tool use.** The injected line tokenizes to roughly 20-25 tokens; Claude Code wraps hook stdout in a `<system-reminder>` block adding another ~10. The first turn (datetime only) is closer to 25 tokens. Over a 100-turn conversation that is ~3,500 tokens, well under 0.05% of a 200K context window. Because datetime and duration arrive as injected context, Claude never has to call a tool to get them: no permission prompts, no tool-call latency, no extra tokens beyond the injected line.
+**~22 tokens per turn. No tool use.** The injected line tokenizes to roughly 12-15 tokens; Claude Code wraps hook stdout in a `<system-reminder>` block adding another ~10. Over a 100-turn conversation that is ~2,200 tokens, well under 0.05% of a 200K context window. Because datetime and duration arrive as injected context, Claude never has to call a tool to get them: no permission prompts, no tool-call latency, no extra tokens beyond the injected line.
 
 ## Why
 
