@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# claude-now-context - manage the datetime UserPromptSubmit hook for Claude Code
+# https://github.com/pereljon/claude-now-context
+
+set -euo pipefail
+
+VERSION="0.1.0"
+HOOK_CMD='echo "Current datetime: $(date +'\''%Y-%m-%d %H:%M:%S %Z'\'')"'
+
+show_help() {
+  cat <<EOF
+claude-now-context $VERSION
+
+A Claude Code hook that injects the current local datetime into every prompt
+as context, so Claude always knows "now".
+
+USAGE:
+  claude-now-context <command> [scope]
+
+COMMANDS:
+  --install      Install the hook into settings.json
+  --uninstall    Remove the hook from settings.json
+  --status       Report whether the hook is currently installed
+  --version      Print version and exit
+  --help         Show this help
+
+SCOPE (optional, defaults to user):
+  user           ~/.claude/settings.json
+  project        ./.claude/settings.json (in current directory)
+
+EXAMPLES:
+  claude-now-context --install
+  claude-now-context --install project
+  claude-now-context --status
+  claude-now-context --uninstall
+
+Requires: jq, date, curl (for one-liner installs).
+EOF
+}
+
+resolve_settings_path() {
+  local scope="${1:-user}"
+  case "$scope" in
+    user)    echo "${HOME}/.claude/settings.json" ;;
+    project) echo ".claude/settings.json" ;;
+    *)
+      echo "error: unknown scope '$scope' (expected 'user' or 'project')" >&2
+      exit 1
+      ;;
+  esac
+}
+
+require_jq() {
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "error: jq is required (https://stedolan.github.io/jq/)" >&2
+    exit 1
+  fi
+}
+
+hook_present() {
+  local settings="$1"
+  [[ -f "$settings" ]] || return 1
+  jq --arg cmd "$HOOK_CMD" -e '
+    (.hooks.UserPromptSubmit // [])
+    | map(.hooks // [])
+    | flatten
+    | map(.command)
+    | index($cmd)
+  ' "$settings" >/dev/null 2>&1
+}
+
+cmd_install() {
+  require_jq
+  local settings
+  settings="$(resolve_settings_path "${1:-user}")"
+
+  if [[ "${1:-user}" == "project" ]]; then
+    mkdir -p "$(dirname "$settings")"
+  else
+    mkdir -p "$(dirname "$settings")"
+  fi
+
+  if [[ ! -f "$settings" ]]; then
+    echo '{}' > "$settings"
+  fi
+
+  if hook_present "$settings"; then
+    echo "Hook already installed in $settings - nothing to do."
+    return 0
+  fi
+
+  cp "$settings" "${settings}.bak.$(date +%s)"
+
+  jq --arg cmd "$HOOK_CMD" '
+    .hooks.UserPromptSubmit = (
+      (.hooks.UserPromptSubmit // [])
+      + [{"hooks": [{"type": "command", "command": $cmd}]}]
+    )
+  ' "$settings" > "${settings}.tmp" && mv "${settings}.tmp" "$settings"
+
+  echo "Installed datetime hook into $settings"
+  echo "Backup saved alongside as ${settings}.bak.*"
+  echo "Takes effect immediately - no session restart needed."
+}
+
+cmd_uninstall() {
+  require_jq
+  local settings
+  settings="$(resolve_settings_path "${1:-user}")"
+
+  if [[ ! -f "$settings" ]]; then
+    echo "No settings file at $settings - nothing to do."
+    return 0
+  fi
+
+  if ! hook_present "$settings"; then
+    echo "Hook not present in $settings - nothing to do."
+    return 0
+  fi
+
+  cp "$settings" "${settings}.bak.$(date +%s)"
+
+  jq --arg cmd "$HOOK_CMD" '
+    .hooks.UserPromptSubmit = (
+      (.hooks.UserPromptSubmit // [])
+      | map(
+          .hooks = ((.hooks // []) | map(select(.command != $cmd)))
+        )
+      | map(select((.hooks | length) > 0))
+    )
+    | if (.hooks.UserPromptSubmit | length) == 0 then del(.hooks.UserPromptSubmit) else . end
+    | if (.hooks // {}) == {} then del(.hooks) else . end
+  ' "$settings" > "${settings}.tmp" && mv "${settings}.tmp" "$settings"
+
+  echo "Removed datetime hook from $settings"
+  echo "Backup saved alongside as ${settings}.bak.*"
+}
+
+cmd_status() {
+  require_jq
+  local settings
+  settings="$(resolve_settings_path "${1:-user}")"
+
+  if [[ ! -f "$settings" ]]; then
+    echo "not installed (no settings file at $settings)"
+    return 1
+  fi
+
+  if hook_present "$settings"; then
+    echo "installed in $settings"
+    return 0
+  else
+    echo "not installed in $settings"
+    return 1
+  fi
+}
+
+case "${1:-}" in
+  --install|install)     shift; cmd_install "$@" ;;
+  --uninstall|uninstall) shift; cmd_uninstall "$@" ;;
+  --status|status)       shift; cmd_status "$@" ;;
+  --version|-v)          echo "claude-now-context $VERSION" ;;
+  --help|-h|"")          show_help ;;
+  *)
+    echo "error: unknown command '$1'" >&2
+    show_help >&2
+    exit 1
+    ;;
+esac
