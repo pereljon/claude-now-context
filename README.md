@@ -22,7 +22,7 @@ That line is added to the model's context for the turn. Claude can use it for sc
 
 ## Cost
 
-**~25 tokens per turn. No tool use.** The injected line tokenizes to roughly 15-20 tokens; Claude Code wraps hook stdout in a `<system-reminder>` block adding another ~10. Over a 100-turn conversation that is ~2,500 tokens, well under 0.05% of a 200K context window. Because datetime and duration arrive as injected context, Claude never has to call a tool to get them: no permission prompts, no tool-call latency, no extra tokens beyond the injected line.
+**~35 tokens per turn. No tool use.** The injected line tokenizes to roughly 20-25 tokens; Claude Code wraps hook stdout in a `<system-reminder>` block adding another ~10. The first turn (datetime only) is closer to 25 tokens. Over a 100-turn conversation that is ~3,500 tokens, well under 0.05% of a 200K context window. Because datetime and duration arrive as injected context, Claude never has to call a tool to get them: no permission prompts, no tool-call latency, no extra tokens beyond the injected line.
 
 ## Why
 
