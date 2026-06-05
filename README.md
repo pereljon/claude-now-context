@@ -14,7 +14,7 @@ That line is added to the model's context for the turn. Claude can use it for sc
 
 ## Cost
 
-**~25 tokens per turn.** The injected line ("Current datetime: 2026-06-05 09:30:00 PDT") tokenizes to ~12-15 tokens; Claude Code wraps hook stdout in a `<system-reminder>` block adding another ~10. Over a 100-turn conversation that's ~2,500 tokens, well under 0.05% of a 200K context window. Not worth optimizing.
+**~25 tokens per turn. No tool use.** The injected line ("Current datetime: 2026-06-05 09:30:00 PDT") tokenizes to ~12-15 tokens; Claude Code wraps hook stdout in a `<system-reminder>` block adding another ~10. Over a 100-turn conversation that's ~2,500 tokens, well under 0.05% of a 200K context window. Because the datetime arrives as injected context, Claude never has to call a tool (Bash, MCP, etc.) to get it - no permission prompts, no tool-call latency, no extra tokens beyond the injected line.
 
 ## Why
 
