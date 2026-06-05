@@ -132,7 +132,7 @@ brew untap pereljon/tap   # optional
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pereljon/claude-now-context/main/uninstall.sh)"
 ```
 
-The uninstall path surgically removes both hook entries, saves a backup, and leaves the rest of your settings untouched.
+The uninstall path surgically removes both hook entries, saves a backup, and leaves the rest of your settings untouched. It also removes the session state directory (`~/.claude/now-context-state/`) and all state files.
 
 ## Making the datetime visible in responses
 
