@@ -12,9 +12,13 @@ Current datetime: 2026-06-05 09:30:00 PDT
 
 That line is added to the model's context for the turn. Claude can use it for scheduling, log timestamps, date-aware reasoning, or anything else. It is not forced into the visible response.
 
+## Cost
+
+**~25 tokens per turn.** The injected line ("Current datetime: 2026-06-05 09:30:00 PDT") tokenizes to ~12-15 tokens; Claude Code wraps hook stdout in a `<system-reminder>` block adding another ~10. Over a 100-turn conversation that's ~2,500 tokens, well under 0.05% of a 200K context window. Not worth optimizing.
+
 ## Why
 
-Out of the box, Claude doesn't know the current time. It may infer a stale date from training data, ask the user, or fabricate one. This hook removes the guesswork at negligible token cost (~25 tokens per turn).
+Out of the box, Claude doesn't know the current time. It may infer a stale date from training data, ask the user, or fabricate one. This hook removes the guesswork at negligible token cost.
 
 ## Why a hook (and not something else)
 
