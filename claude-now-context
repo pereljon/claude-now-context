@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-VERSION="0.3.0"
+VERSION="0.3.1"
 HOOK_CMD='echo "Current datetime: $(date +'\''%a %Y-%m-%d %H:%M:%S %Z'\'')"'
 HOOK_SIGNATURE='echo "Current datetime:'
 DRY_RUN=0
@@ -178,7 +178,9 @@ write_json_atomic() {
     };
 
     my $remove_signature_hooks = sub {
-      my $list = $data->{hooks}{UserPromptSubmit} // [];
+      my $list = (ref($data->{hooks}) eq "HASH"
+        ? $data->{hooks}{UserPromptSubmit}
+        : undef) // [];
       my @kept;
       for my $entry (@$list) {
         next unless ref($entry) eq "HASH";
